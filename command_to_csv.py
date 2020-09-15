@@ -118,7 +118,7 @@ class Connection_data(object):
         for i in range(MAX_RETRY):
             try:
                 print('Trying to enable...')
-                conn.enable(cmd='enable', pattern='SecurID_PASSCODE:')
+                conn.enable(cmd='enable', pattern='Secret:')
                 self.enabled.append(hostname)
                 return True
             except:
