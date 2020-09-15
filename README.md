@@ -38,6 +38,6 @@ optional arguments:
  - Running command "show cdp neighbor"
 ```
 $
-$ python command_to_csv.py -H sw1 -U username -C "show cdp neighbor" -R mincui@qti.qualcomm.com
+$ python command_to_csv.py -H sw1 -U username -C "show cdp neighbor" -R cuiminghao8@gmail.com
 $
 ```
