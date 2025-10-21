@@ -8,7 +8,6 @@
 - **Multiple commands per device** – pass several commands in the same run; the CSV output is generated for every `<hostname>_<command>.csv` pair.
 - **Automatic platform detection** – Netmiko's `SSHDetect` is used to discover the correct device type before the command is executed, reducing per-device configuration.
 - **Structured parsing with TextFSM** – results are normalized with `pandas.json_normalize` and saved as CSVs that are ready for spreadsheets or downstream tools.
-- **Privilege escalation support** – use the `-S/--secret` flag to be prompted for an enable password before running the commands.
 - **Email delivery** – if recipients are provided, the generated CSV files are attached to an e-mail sent via SMTP.
 
 Supported commands are listed in the [NTC template repository](https://github.com/networktocode/ntc-templates/tree/master/templates), and the supported platforms are maintained in the [NTC template index](https://github.com/networktocode/ntc-templates/blob/master/tests/test_index_order.py#L59).
@@ -54,7 +53,7 @@ optional arguments:
                         Optional. Multiple addresses should be separated by ";"
 ```
 
-When you start the script you will be prompted for the SSH password and, if you include the `--secret` flag, the enable password.
+When you start the script you will be prompted for the SSH password. The CLI also accepts `--secret`, but the provided enable password is not used by the script when executing commands.
 
 ### Example
 
@@ -83,4 +82,4 @@ email_alert(
 )
 ```
 
-For testing purposes you can leave `--recipient` unset and the CSV files will be left on disk for local inspection.
+The script always calls `email_alert`, so be sure to configure valid SMTP settings and pass `--recipient` when running it. If you prefer to inspect the CSV files locally, comment out or remove the `email_alert` invocation in `command_to_csv.py` before execution.
