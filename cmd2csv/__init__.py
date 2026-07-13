@@ -1,9 +1,5 @@
-"""Command to CSV package."""
+"""cmd2csv: run commands on network devices, parse the output, export CSV/JSON."""
 
-__all__ = [
-    "cli",
-    "ndb_client",
-    "devices",
-    "parser_pipeline",
-    "exporter",
-]
+__version__ = "0.2.0"
+
+__all__ = ["__version__"]

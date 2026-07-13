@@ -1,24 +1,22 @@
 from __future__ import annotations
-from typing import Dict, List, Any
-from collections import defaultdict
-from datetime import datetime
-import re
-from pathlib import Path
 
-from genie.metaparser.util.exceptions import SchemaEmptyParserError
-from ntc_templates.parse import parse_output
-import textfsm
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_command(command: str) -> str:
     s = command.strip().lower()
-    s = re.sub(r"\s+", "_", s)
     s = re.sub(r"[^\w]+", "_", s)
     return s.strip("_")
 
 
 def flatten_one_level(d: dict) -> dict:
-    out: dict[str, Any] = {}
+    out: Dict[str, Any] = {}
     for k, v in d.items():
         if isinstance(v, dict):
             for kk, vv in v.items():
@@ -28,14 +26,12 @@ def flatten_one_level(d: dict) -> dict:
     return out
 
 
-def genie_to_rows(parsed: Any) -> List[Dict[str, Any]] | None:
+def genie_to_rows(parsed: Any) -> Optional[List[Dict[str, Any]]]:
     if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
         return parsed
-
-    if isinstance(parsed, dict):
-        # 尝试识别「key -> dict」结构
+    if isinstance(parsed, dict) and parsed:
         if all(isinstance(v, dict) for v in parsed.values()):
-            rows: list[dict] = []
+            rows: List[Dict[str, Any]] = []
             for k, v in parsed.items():
                 row = {"_key": k}
                 row.update(flatten_one_level(v))
@@ -44,24 +40,54 @@ def genie_to_rows(parsed: Any) -> List[Dict[str, Any]] | None:
     return None
 
 
-def try_genie_parse(device, command: str) -> List[Dict[str, Any]] | None:
+def _genie_parse_errors() -> Tuple[type, ...]:
+    from genie.metaparser.util.exceptions import SchemaEmptyParserError
+
+    errors: Tuple[type, ...] = (SchemaEmptyParserError,)
     try:
-        parsed = device.parse(command)
-    except (SchemaEmptyParserError, Exception):
+        from genie.libs.parser.utils.common import ParserNotFound  # type: ignore
+
+        errors = (SchemaEmptyParserError, ParserNotFound)
+    except Exception:  # pragma: no cover - older genie versions
+        pass
+    return errors
+
+
+def try_genie_parse(
+    device, command: str, raw_output: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
+    try:
+        expected = _genie_parse_errors()
+    except Exception:
+        expected = (Exception,)
+    try:
+        if raw_output is not None:
+            parsed = device.parse(command, output=raw_output)
+        else:
+            parsed = device.parse(command)
+    except expected as exc:
+        logger.debug("Genie parser unavailable for %r: %s", command, exc)
+        return None
+    except Exception as exc:
+        logger.warning("Genie parse failed for %r: %s", command, exc)
         return None
     return genie_to_rows(parsed)
 
 
-def try_ntc_parse(ntc_platform: str, command: str, raw_output: str) -> List[Dict[str, Any]] | None:
+def try_ntc_parse(
+    ntc_platform: str, command: str, raw_output: str
+) -> Optional[List[Dict[str, Any]]]:
     try:
-        rows = parse_output(
-            platform=ntc_platform,
-            command=command,
-            data=raw_output,
-        )
-        return rows or None
-    except Exception:
+        from ntc_templates.parse import parse_output
+    except Exception as exc:  # pragma: no cover - dep missing
+        logger.warning("ntc-templates not available: %s", exc)
         return None
+    try:
+        rows = parse_output(platform=ntc_platform, command=command, data=raw_output)
+    except Exception as exc:
+        logger.debug("NTC parse failed for %s/%r: %s", ntc_platform, command, exc)
+        return None
+    return rows or None
 
 
 def template_filename(ntc_platform: str, command: str) -> str:
@@ -69,32 +95,34 @@ def template_filename(ntc_platform: str, command: str) -> str:
     return f"{ntc_platform}__{cmd_norm}.textfsm"
 
 
-def try_textfsm_auto(templates_dir: str, ntc_platform: str, command: str, raw_output: str) -> List[Dict[str, Any]] | None:
+def try_textfsm_auto(
+    templates_dir: str, ntc_platform: str, command: str, raw_output: str
+) -> Optional[List[Dict[str, Any]]]:
     path = Path(templates_dir) / template_filename(ntc_platform, command)
     if not path.exists():
         return None
+    try:
+        import textfsm
 
-    with path.open() as f:
-        fsm = textfsm.TextFSM(f)
+        with path.open() as f:
+            fsm = textfsm.TextFSM(f)
+        rows = fsm.ParseText(raw_output)
+    except Exception as exc:
+        logger.warning("TextFSM template %s failed: %s", path, exc)
+        return None
 
-    rows = fsm.ParseText(raw_output)
     headers = [h.lower() for h in fsm.header]
-
-    result: list[dict] = []
-    for r in rows:
-        result.append(dict(zip(headers, r)))
-    return result or None
+    return [dict(zip(headers, r)) for r in rows] or None
 
 
 def fallback_whitespace(raw_output: str) -> List[Dict[str, Any]]:
-    rows: list[dict] = []
+    rows: List[Dict[str, Any]] = []
     for line in raw_output.splitlines():
         line = line.rstrip()
         if not line:
             continue
         cols = line.split()
-        row = {f"col{i+1}": v for i, v in enumerate(cols)}
-        rows.append(row)
+        rows.append({f"col{i + 1}": v for i, v in enumerate(cols)})
     return rows
 
 
@@ -103,88 +131,31 @@ def process_one(
     dev_meta: Dict[str, Any],
     ntc_platform: str,
     command: str,
-    templates_dir: str | None = None,
-) -> tuple[str, List[Dict[str, Any]]]:
+    templates_dir: Optional[str] = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
     entity_name = normalize_command(command)
 
-    # 先试 Genie
-    rows = try_genie_parse(device, command)
-    parse_engine = None
+    raw_output = device.execute(command)
+    rows = try_genie_parse(device, command, raw_output=raw_output)
+    parse_engine = "genie" if rows else None
 
-    if rows:
-        parse_engine = "genie"
-    else:
-        raw_output = device.execute(command)
-
+    if not rows:
         ntc_rows = try_ntc_parse(ntc_platform, command, raw_output)
         if ntc_rows:
-            rows = ntc_rows
-            parse_engine = "ntc"
-        elif templates_dir:
-            tfsm_rows = try_textfsm_auto(templates_dir, ntc_platform, command, raw_output)
-            if tfsm_rows:
-                rows = tfsm_rows
-                parse_engine = "textfsm"
-            else:
-                rows = fallback_whitespace(raw_output)
-                parse_engine = "raw_space"
-        else:
-            rows = fallback_whitespace(raw_output)
-            parse_engine = "raw_space"
+            rows, parse_engine = ntc_rows, "ntc"
 
-    out_rows: list[dict] = []
-    for r in rows:
-        row = {
-            **dev_meta,
-            "command": command,
-            "parse_engine": parse_engine,
-            **r,
-        }
-        out_rows.append(row)
+    if not rows and templates_dir:
+        tfsm_rows = try_textfsm_auto(templates_dir, ntc_platform, command, raw_output)
+        if tfsm_rows:
+            rows, parse_engine = tfsm_rows, "textfsm"
 
+    if not rows:
+        rows = fallback_whitespace(raw_output)
+        parse_engine = "raw_space"
+
+    out_rows = [{**dev_meta, "command": command, "parse_engine": parse_engine, **r} for r in rows]
     return entity_name, out_rows
 
 
-def collect_from_testbed(
-    testbed,
-    hostnames: List[str],
-    commands: List[str],
-    templates_dir: str | None = None,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    返回: normalized_command -> List[rows]
-    """
-    entities: dict[str, list[dict]] = defaultdict(list)
-    ts = datetime.utcnow().isoformat()
-
-    # 只使用指定 hostnames
-    devices = [
-        dev for name, dev in testbed.devices.items()
-        if (not hostnames) or (name in hostnames)
-    ]
-
-    for dev in devices:
-        dev.connect(log_stdout=False)
-
-        ntc_platform = dev.custom.get("ntc_platform", dev.os)
-        dev_meta = {
-            "timestamp": ts,
-            "hostname": dev.name,
-            "site": dev.custom.get("site", ""),
-            "role": dev.custom.get("role", ""),
-            "os": dev.os,
-        }
-
-        for cmd in commands:
-            entity_name, rows = process_one(
-                dev,
-                dev_meta,
-                ntc_platform,
-                cmd,
-                templates_dir=templates_dir,
-            )
-            entities[entity_name].extend(rows)
-
-        dev.disconnect()
-
-    return entities
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")

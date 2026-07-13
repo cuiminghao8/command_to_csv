@@ -1,6 +1,6 @@
-pyats
-genie
-ntc-templates
-textfsm
-pyyaml
-requests
+pyats>=23.0
+genie>=23.0
+ntc-templates>=4.0
+textfsm>=1.1
+pyyaml>=6.0
+requests>=2.28

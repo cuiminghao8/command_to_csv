@@ -1,0 +1,51 @@
+# Example cmd2csv configuration. Copy to cmd2csv.yaml and adjust.
+# All fields are optional; CLI flags and env vars override values here.
+
+hosts:
+  - R1
+  - R2
+  - SW1
+commands:
+  - show ip interface brief
+  - show interface status
+  - show version
+
+ndb_url: https://ndb.example.com/api
+# ndb_token: set via CMD2CSV_NDB_TOKEN env var (recommended)
+ndb_timeout: 10
+ndb_verify: true                 # or /etc/ssl/certs/ca.pem, or false
+
+username: admin
+# password: set via CMD2CSV_PASSWORD env var (recommended)
+# enable_password: set via CMD2CSV_ENABLE_PASSWORD env var
+default_port: 22
+
+templates_dir: ./templates
+output_dir: ./output
+formats:
+  - csv
+  - json
+
+workers: 8
+connect_retries: 2
+
+log_level: INFO
+log_file: ./logs/cmd2csv.log
+
+os_mappings:
+  - vendor: cisco
+    os: iosxe
+    pyats_os: iosxe
+    ntc_platform: cisco_ios
+
+email:
+  enabled: false
+  smtp_server: smtp.example.com
+  smtp_port: 587
+  use_tls: true
+  username: netops@example.com
+  password: change-me
+  sender: netops@example.com
+  recipients:
+    - team@example.com
+  subject: cmd2csv daily report
